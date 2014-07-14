@@ -1,0 +1,26 @@
+This program eats PNGs and outputs SVG nonograms such that each pixel
+of the input PNG becomes a square in the nonogram.
+
+It also tells you if the nonogram is simple. This is defined to mean
+that it is solvable without making guesses and looking at a single row
+or column at a time. This necessarily also implies having a unique
+solution.
+
+To build:
+
+* You need Haskell and Cabal
+
+$ cabal install --dependencies-only
+$ cabal configure
+$ cabal build
+
+* Most likely you will need some header packages installed for the gd
+  graphics library and other stuff. Trying to install the dependencies
+  should tell you if you don't have everything you need.
+
+* Right now pngToNono expects to have the configuration file
+  (nonosvg.conf) in the working directory and will fail to work
+  without it.
+
+* I don't know if it's possible to build this on Windows (though my
+  best guess would be yes).
