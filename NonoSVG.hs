@@ -28,17 +28,18 @@ import Text.Blaze.Svg11 ((!))
 import qualified Text.Blaze.Svg11 as S
 import qualified Text.Blaze.Svg11.Attributes as A
 import Text.Blaze.Svg.Renderer.Pretty (renderSvg)
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, when, join, liftM)
 import Data.String (fromString)
 import Data.List (transpose)
 import qualified Data.Configurator as C
+import qualified Data.Configurator.Types as CT
 
 -- configuration, read from nonosvg.conf
-data Config = Config { guides :: Int
-                     , strokeWidth :: Double
+data Config = Config { guides :: (Int, Int)
+                     , strokeWidth :: (Double, Double)
                      , scaleFactor :: Double
-                     , guideColor :: String
-                     , normalColor :: String
+                     , guideColor :: (String, String)
+                     , normalColor :: (String, String)
                      , horizCluesMargin :: Double
                      , vertCluesMargin :: Double
                      , horizCluesSep :: Double
@@ -52,15 +53,22 @@ data Config = Config { guides :: Int
                      , textAnchor :: String
                      }
 
+loadHorizVert :: CT.Configured a => CT.Config -> CT.Name -> IO (a, a)
+loadHorizVert c name = do
+  hv <- C.lookup c name
+  case hv of
+    Just (h, v) -> return (h, v)
+    Nothing     -> liftM (join (,)) $ C.require c name
+
 -- FIXME currently loads from working directory
 loadConfig :: IO Config
 loadConfig = do
   c <- C.load [ C.Required "nonosvg.conf" ]
-  guides           <- C.require c "guides"
-  strokeWidth      <- C.require c "stroke_width"
+  guides           <- loadHorizVert c "guides"
+  strokeWidth      <- loadHorizVert c "stroke_width"
   scaleFactor      <- C.require c "scale_factor"
-  guideColor       <- C.require c "strong_color"
-  normalColor      <- C.require c "weak_color"
+  guideColor       <- loadHorizVert c "strong_color"
+  normalColor      <- loadHorizVert c "weak_color"
   horizCluesMargin <- C.require c "horiz_clues_margin"
   vertCluesMargin  <- C.require c "vert_clues_margin"
   horizCluesSep    <- C.require c "horiz_clues_sep"
@@ -78,11 +86,11 @@ defaultConfig :: Config
 defaultConfig = Config{..}
   where
     -- stronger lines every n cells
-    guides = 5
-    strokeWidth = 0.7
+    guides = join (,) 5
+    strokeWidth = join (,) 0.7
     scaleFactor = 0.35
-    guideColor = "black"
-    normalColor = "lightgray"
+    guideColor = join (,) "black"
+    normalColor = join (,) "lightgray"
     horizCluesMargin = 0.4
     vertCluesMargin = 0.4
     horizCluesSep = 1.3
@@ -134,28 +142,38 @@ cellDatas GridParams{..} =
       row ry = map (\x -> CellData x ry (cw x) (ch ry)) [0..columns-1]
   in map row [0..rows-1]
 
+data HorizVert = Horiz | Vert
+               deriving (Eq, Show)
+
+chooseHV :: HorizVert -> (a, a) -> a
+chooseHV Horiz = fst
+chooseHV Vert  = snd
+
 drawGrid :: Config -> GridParams -> S.Svg
 drawGrid Config{..} GridParams{..} =
   let gridWidth = cellWidth * fromIntegral columns
       gridHeight = cellHeight * fromIntegral rows
       cx x = fromIntegral x * cellWidth
       cy y = fromIntegral y * cellHeight
-      strongLine = strokeLine guideColor
-      weakLine = strokeLine normalColor
-      strokeLine strokeCol x1 y1 x2 y2 =
+      strongLine hv = strokeLine (chooseHV hv guideColor) (chooseHV hv strokeWidth)
+      weakLine hv = strokeLine (chooseHV hv normalColor) (chooseHV hv strokeWidth)
+      noLine _ _ _ _ _ = return ()
+      strokeLine color width x1 y1 x2 y2 =
         S.line ! A.x1 (val x1) ! A.y1 (val y1) ! A.x2 (val x2) ! A.y2 (val y2) !
-        A.stroke (fromString strokeCol) ! A.strokeWidth (val strokeWidth)
+        A.stroke (fromString color) ! A.strokeWidth (val width)
       -- draw either strong or weak lines, depending on param
       drawEither strong =
-        let strong_ = if strong     then strongLine else \_ _ _ _ -> return ()
-            weak_   = if not strong then weakLine   else \_ _ _ _ -> return ()
+        let strong_ = if strong     then strongLine else noLine
+            weak_   = if not strong then weakLine   else noLine
         in do
           forM_ [0..rows] $ \y ->
-            (if y `mod` guides == 0 || y == rows then strong_ else weak_)
-            0 (cy y) gridWidth (cy y)
+            (if y `mod` chooseHV Horiz guides == 0 ||
+                y == rows then strong_ else weak_)
+            Horiz 0 (cy y) gridWidth (cy y)
           forM_ [0..columns] $ \x ->
-            (if x `mod` guides == 0 || x == columns then strong_ else weak_)
-            (cx x) 0 (cx x) gridHeight
+            (if x `mod` chooseHV Vert guides == 0 ||
+                x == columns then strong_ else weak_)
+            Vert (cx x) 0 (cx x) gridHeight
   in do
     drawEither False
     drawEither True
