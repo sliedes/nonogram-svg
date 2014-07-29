@@ -33,9 +33,10 @@ import Data.String (fromString)
 import Data.List (transpose)
 import qualified Data.Configurator as C
 import qualified Data.Configurator.Types as CT
+import Control.Applicative ((<$>))
 
 -- configuration, read from nonosvg.conf
-data Config = Config { guides :: (Int, Int)
+data Config = Config { guides :: (Int -> Bool, Int -> Bool)
                      , strokeWidth :: (Double, Double)
                      , scaleFactor :: Double
                      , guideColor :: (String, String)
@@ -60,11 +61,31 @@ loadHorizVert c name = do
     Just (h, v) -> return (h, v)
     Nothing     -> liftM (join (,)) $ C.require c name
 
+data GuideFun = GuideFun (Int -> Bool)
+
+instance CT.Configured GuideFun where
+  convert v =
+    -- Integer -> guides every n
+    case (CT.convert v :: Maybe Int) of
+      Just n -> Just $ GuideFun $ \x -> x `mod` n == 0
+      Nothing ->
+        -- List of integers -- explicit positions of guides
+        GuideFun . flip elem <$> CT.convert v
+
+loadGuides :: CT.Config -> IO (Int -> Bool, Int -> Bool)
+loadGuides c = do
+  hv <- C.lookup c "guides"
+  case hv of
+    Just (GuideFun h, GuideFun v) -> return (h, v)
+    Nothing                       -> do
+      GuideFun f <- C.require c "guides"
+      return (f, f)
+
 -- FIXME currently loads from working directory
 loadConfig :: IO Config
 loadConfig = do
   c <- C.load [ C.Required "nonosvg.conf" ]
-  guides           <- loadHorizVert c "guides"
+  guides           <- loadGuides c
   strokeWidth      <- loadHorizVert c "stroke_width"
   scaleFactor      <- C.require c "scale_factor"
   guideColor       <- loadHorizVert c "strong_color"
@@ -86,7 +107,7 @@ defaultConfig :: Config
 defaultConfig = Config{..}
   where
     -- stronger lines every n cells
-    guides = join (,) 5
+    guides = join (,) (\x -> x `mod` 5 == 0)
     strokeWidth = join (,) 0.7
     scaleFactor = 0.35
     guideColor = join (,) "black"
@@ -155,8 +176,8 @@ drawGrid Config{..} GridParams{..} =
       gridHeight = cellHeight * fromIntegral rows
       cx x = fromIntegral x * cellWidth
       cy y = fromIntegral y * cellHeight
-      strongLine hv = strokeLine (chooseHV hv guideColor) (chooseHV hv strokeWidth)
-      weakLine hv = strokeLine (chooseHV hv normalColor) (chooseHV hv strokeWidth)
+      strongLine hv = strokeLine (chooseHV hv guideColor) $ chooseHV hv strokeWidth
+      weakLine hv = strokeLine (chooseHV hv normalColor) $ chooseHV hv strokeWidth
       noLine _ _ _ _ _ = return ()
       strokeLine color width x1 y1 x2 y2 =
         S.line ! A.x1 (val x1) ! A.y1 (val y1) ! A.x2 (val x2) ! A.y2 (val y2) !
@@ -167,12 +188,12 @@ drawGrid Config{..} GridParams{..} =
             weak_   = if not strong then weakLine   else noLine
         in do
           forM_ [0..rows] $ \y ->
-            (if y `mod` chooseHV Horiz guides == 0 ||
-                y == rows then strong_ else weak_)
+            (if chooseHV Horiz guides y || y == 0 || y == rows
+             then strong_ else weak_)
             Horiz 0 (cy y) gridWidth (cy y)
           forM_ [0..columns] $ \x ->
-            (if x `mod` chooseHV Vert guides == 0 ||
-                x == columns then strong_ else weak_)
+            (if chooseHV Vert guides x || x == 0 || x == columns
+             then strong_ else weak_)
             Vert (cx x) 0 (cx x) gridHeight
   in do
     drawEither False
